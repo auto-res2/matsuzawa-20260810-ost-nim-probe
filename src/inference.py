@@ -281,13 +281,45 @@ def sample_memory(label):
         used, total = (p.strip() for p in first.split(","))
         out["gpu_used_mib"] = int(used)
         out["gpu_total_mib"] = int(total)
+    # MemAvailable alone cannot say WHERE host memory went: page cache from
+    # reading 16 GB of weights off Lustre, pinned CUDA buffers, and ordinary
+    # process memory all move it. Record the components that separate them.
+    wanted = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Buffers",
+              "Shmem", "SReclaimable", "SUnreclaim", "Mapped", "PageTables")
     try:
         for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith(("MemTotal:", "MemAvailable:")):
-                key, val = line.split(":")
+            key, _, val = line.partition(":")
+            if key in wanted:
                 out[f"host_{key.lower()}_kb"] = int(val.split()[0])
     except OSError:
         pass
+
+    # Resident memory of every process we can see, so "the server's own
+    # footprint" is distinguishable from cache. Apptainer shares the PID
+    # namespace by default, so the nested server's processes appear here.
+    procs = []
+    total_rss = 0
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text()
+        except (OSError, ProcessLookupError):
+            continue
+        name = rss = None
+        for line in status.splitlines():
+            if line.startswith("Name:"):
+                name = line.split(maxsplit=1)[1]
+            elif line.startswith("VmRSS:"):
+                rss = int(line.split()[1])
+            if name and rss is not None:
+                break
+        if rss:
+            total_rss += rss
+            procs.append((rss, name, entry.name))
+    out["host_total_rss_kb"] = total_rss
+    procs.sort(reverse=True)
+    out["top_rss"] = [{"pid": p, "name": n, "rss_kb": r} for r, n, p in procs[:6]]
     return out
 
 
@@ -554,8 +586,13 @@ def summarize(report):
     print(f"[boltz2 api] {api['verdict']} ready_after={ready}s predict_sec={api.get('predict_sec')} "
           f"confidence={pred.get('confidence_scores')}")
     for m in api.get("memory", []):
-        print(f"[memory]     {m['label']}: gpu_used={m.get('gpu_used_mib')}/{m.get('gpu_total_mib')} MiB  "
-              f"host_avail={m.get('host_memavailable_kb', 0) // 1024} MiB")
+        mib = lambda k: m.get(k, 0) // 1024  # noqa: E731 - local formatting shorthand
+        print(f"[memory]     {m['label']}: gpu={m.get('gpu_used_mib')} MiB  "
+              f"avail={mib('host_memavailable_kb')}  free={mib('host_memfree_kb')}  "
+              f"cached={mib('host_cached_kb')}  shmem={mib('host_shmem_kb')}  "
+              f"rss_total={mib('host_total_rss_kb')} MiB")
+        for p in m.get("top_rss", [])[:3]:
+            print(f"[memory]       top rss: {p['name']} {p['rss_kb'] // 1024} MiB")
     print("=" * 70)
 
     ok = (
