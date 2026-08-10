@@ -5,13 +5,26 @@ repository's execution contract. It holds no probe logic of its own.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-import hydra
-from omegaconf import DictConfig, OmegaConf
+try:
+    import hydra
+    from omegaconf import DictConfig, OmegaConf
+except ModuleNotFoundError:
+    # The execution image's CMD is regenerated per run and does not reliably
+    # invoke `uv run`, so this process may start on the bare interpreter with
+    # no project environment. Re-exec through uv exactly once: uv materializes
+    # the locked environment from its cache (populated at image build), which
+    # needs no network on the compute node.
+    if os.environ.get("PROBE_BOOTSTRAPPED") or shutil.which("uv") is None:
+        raise
+    os.environ["PROBE_BOOTSTRAPPED"] = "1"
+    os.execvp("uv", ["uv", "run", "python", "-u", "-m", "src.main", *sys.argv[1:]])
 
 # The probe is I/O-bound and cheap, so the modes differ only in how many
 # PLINDER systems are actually scored end to end.
