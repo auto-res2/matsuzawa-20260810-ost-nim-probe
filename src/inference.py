@@ -21,6 +21,7 @@ actual compare-ligand-structures invocation, never by the help exit code.
 import json
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -225,6 +226,39 @@ def _nested_env(ap):
     return env
 
 
+def prepare_nested_session(workdir):
+    """Point the nested apptainer's session base at the Lustre job directory.
+
+    The inner apptainer wants its session under /var/lib/apptainer (compiled
+    SESSIONDIR base). Inside the job container that path lands on the
+    writable overlay, and squashfuse mounting the inner sif there produces
+    an empty rootfs — the tool "runs" against a container with no /bin/sh.
+    Verified on the login node: putting the session base on a real bound
+    filesystem makes the same nested invocation work, and a symlink is
+    enough because apptainer resolves the path before using it. So: replace
+    /var/lib/apptainer with a symlink to a directory on the bound Lustre.
+    """
+    out = {}
+    target = Path(workdir).resolve() / "apptainer_var"
+    base = Path("/var/lib/apptainer")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if base.is_symlink():
+            base.unlink()
+        elif base.exists():
+            shutil.rmtree(base)
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.symlink_to(target)
+        out["session_base"] = str(target)
+        out["verdict"] = "linked"
+    except OSError as e:
+        # A read-only outer rootfs would land here; the nested checks then
+        # run anyway and their own errors say what actually happened.
+        out["error"] = repr(e)
+        out["verdict"] = "failed"
+    return out
+
+
 # ---------------------------------------------------------------- Boltz-2 NIM
 
 
@@ -418,6 +452,7 @@ def run(cfg, results_dir, run_id):
 
     nested_ok = report["apptainer"]["verdict"] == "runs"
     if nested_ok:
+        report["nested_session"] = prepare_nested_session(outdir)
         report["diffdock"] = check_diffdock(cfg, systems[0] if systems else None, outdir)
         report["boltz2_api"] = check_boltz2_api(cfg, outdir)
     else:
