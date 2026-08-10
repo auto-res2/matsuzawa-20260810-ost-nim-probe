@@ -262,6 +262,35 @@ def prepare_nested_session(workdir):
 # ---------------------------------------------------------------- Boltz-2 NIM
 
 
+def sample_memory(label):
+    """GPU and host memory at one instant, for sizing the NIM server.
+
+    Sampled at baseline / ready / after-predict rather than continuously: the
+    interesting quantity is how much the resident server holds, and the
+    difference between baseline and ready is exactly that. nvidia-smi reports
+    the whole device, so on a shared node this includes other tenants — the
+    baseline sample is what makes the delta meaningful anyway.
+    """
+    out = {"label": label}
+    r = _run(
+        ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+        timeout=60,
+    )
+    if r.get("returncode") == 0:
+        first = r["stdout"].strip().splitlines()[0]
+        used, total = (p.strip() for p in first.split(","))
+        out["gpu_used_mib"] = int(used)
+        out["gpu_total_mib"] = int(total)
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith(("MemTotal:", "MemAvailable:")):
+                key, val = line.split(":")
+                out[f"host_{key.lower()}_kb"] = int(val.split()[0])
+    except OSError:
+        pass
+    return out
+
+
 def _http_get(url, timeout):
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -315,6 +344,7 @@ def check_boltz2_api(cfg, workdir):
         "/opt/nim/start_server.sh",
     ]
     out["server_cmd"] = " ".join(cmd)
+    out["memory"] = [sample_memory("baseline_before_server")]
     log_path = Path(workdir) / "boltz2_server.log"
     ready_url = nim["base_url"] + "/v1/health/ready"
     deadline = time.time() + int(nim["ready_timeout_sec"])
@@ -337,6 +367,8 @@ def check_boltz2_api(cfg, workdir):
             out["verdict"] = "server_died" if "server_exit_code" in out else "ready_timeout"
             return out
 
+        out["memory"].append(sample_memory("server_ready"))
+
         # One real prediction, sized to finish quickly: a short protein and
         # aspirin. Anything with structures[] in the response proves the
         # whole inference path, which is all this probe claims.
@@ -355,6 +387,7 @@ def check_boltz2_api(cfg, workdir):
         t0 = time.time()
         resp = _http_post_json(nim["base_url"] + "/biology/mit/boltz2/predict", payload, int(nim["request_timeout_sec"]))
         out["predict_sec"] = round(time.time() - t0, 1)
+        out["memory"].append(sample_memory("after_predict"))
         if resp.get("status") == 200 and resp.get("json", {}).get("structures"):
             j = resp["json"]
             out["predict"] = {
@@ -520,6 +553,9 @@ def summarize(report):
     pred = api.get("predict", {})
     print(f"[boltz2 api] {api['verdict']} ready_after={ready}s predict_sec={api.get('predict_sec')} "
           f"confidence={pred.get('confidence_scores')}")
+    for m in api.get("memory", []):
+        print(f"[memory]     {m['label']}: gpu_used={m.get('gpu_used_mib')}/{m.get('gpu_total_mib')} MiB  "
+              f"host_avail={m.get('host_memavailable_kb', 0) // 1024} MiB")
     print("=" * 70)
 
     ok = (
