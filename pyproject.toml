@@ -1,14 +1,20 @@
-# Please list the required python packages in `dependencies` below.
-# Keep this file limited to dependencies (hydra-core, wandb, plus
-# task-specific libraries) — see AGENTS.md.
+# Dependencies for the OST/PLINDER shared-install feasibility probe.
+#
+# Deliberately minimal: the probe's whole point is to test whether the
+# OpenStructure install on the cluster's shared filesystem is usable from
+# inside the container, so nothing scientific is installed into the image.
+# Everything else the probe needs is in the Python standard library.
+#
+# Versions are pinned and uv.lock is committed so the image build has no
+# resolution freedom — an unpinned dependency is what lets the Dockerfile
+# generator invent an install line of its own.
 
 [project]
 name = "experiment"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "hydra-core",
-    "wandb",
+    "hydra-core==1.3.2",
 ]
 
 # `src/` is run with `uv run python -m src.main` from the repository root,

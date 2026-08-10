@@ -1,18 +1,49 @@
-# Main configuration for Hydra
-# This file will be populated by AI code generator based on experimental design
-
 defaults:
   - _self_
-  - run: ???  # loads from config/run/, accessible as 'run=' in CLI
 
-# Execution mode: full, sanity, or pilot
-mode: full
-
-# Results output directory
+run: probe
 results_dir: .research/results
+mode: sanity
 
-# WandB configuration (will be set by AI agent)
-wandb:
-  entity: ???
-  project: ???
-  mode: online
+# Everything the probe reaches for lives under this prefix on the cluster's
+# shared (Lustre) filesystem. It is the account-level directory, one level
+# ABOVE the per-user job directory, which is exactly what makes its
+# visibility inside the container an open question.
+shared:
+  account_dir: /data1/rkp00041
+  ost_bin: /data1/rkp00041/.local/envs/ost/bin/ost
+  ost_python: /data1/rkp00041/.local/envs/ost/bin/python
+  plinder_dir: /data1/rkp00041/plinder_lddt_pli_improvement
+  plinder_test_dir: /data1/rkp00041/plinder_lddt_pli_improvement/data/test
+
+# lDDT-PLI settings, matched to plinder.eval so a number produced here is
+# comparable with the ones the other project reports.
+scoring:
+  lddt_pli_radius: 6.0
+  timeout_sec: 600
+  n_systems: 2
+
+# Nested-Apptainer settings shared by the Boltz-2 and DiffDock probes: the
+# job itself runs inside an Apptainer container, so both tools are launched
+# as containers-within-a-container using the cluster's apptainer binary.
+apptainer:
+  bin: /shared/software/apptainer/bin/apptainer
+  cachedir: /data1/rkp00041/apptainer/cache
+
+# The NIM API server half of the probe: launch the Boltz-2 NIM, wait for
+# readiness, and send one real predict request. Paths mirror the documented
+# manual launch in the project's README on the cluster.
+nim:
+  sif: /data1/rkp00041/images/boltz2-1.8.0.sif
+  env_file: /data1/rkp00041/.env
+  cache_dir: /data1/rkp00041/nim/cache
+  workspace_dir: /data1/rkp00041/nim/workspace/boltz2
+  base_url: http://127.0.0.1:8000
+  ready_timeout_sec: 1500
+  request_timeout_sec: 900
+
+# DiffDock is not a server: one `apptainer run --nv` per invocation, cwd
+# fixed to /opt/DiffDock by the sif's %runscript, rank1.sdf as the product.
+diffdock:
+  sif: /data1/rkp00041/images/diffdock.sif
+  timeout_sec: 1200
