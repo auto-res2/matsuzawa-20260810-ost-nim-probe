@@ -301,6 +301,11 @@ def check_boltz2_api(cfg, workdir):
         out["verdict"] = "assets_missing"
         return out
 
+    out["warmup"] = warmup_nested_mount(ap, nim["sif"])
+    if out["warmup"]["verdict"] != "mounted":
+        out["verdict"] = "mount_never_ready"
+        return out
+
     cmd = [
         ap["bin"], "exec", "--nv",
         "--env-file", nim["env_file"],
@@ -385,6 +390,31 @@ def check_boltz2_api(cfg, workdir):
 # ---------------------------------------------------------------- DiffDock
 
 
+def warmup_nested_mount(ap, sif, tries=3, delay_sec=15):
+    """Mount the inner sif until a file from its rootfs is actually visible.
+
+    Observed on this cluster: the same nested invocation intermittently sees
+    an EMPTY inner rootfs ("No runscript and no /bin/sh") and then works on
+    a later attempt — consistent with the squashfuse mount not being ready
+    when apptainer proceeds, e.g. on a cold Lustre read of the sif. So the
+    probe warms the mount with a trivial exec, retrying with a delay, and
+    records every attempt: a pass/fail pattern across attempts is exactly
+    the evidence a one-shot check cannot give.
+    """
+    out = {"attempts": []}
+    for i in range(tries):
+        if i:
+            time.sleep(delay_sec)
+        r = _run([ap["bin"], "exec", sif, "/bin/true"], timeout=300, env=_nested_env(ap))
+        out["attempts"].append(r)
+        if r.get("returncode") == 0:
+            out["verdict"] = "mounted"
+            out["attempts_needed"] = i + 1
+            return out
+    out["verdict"] = "never_mounted"
+    return out
+
+
 def check_diffdock(cfg, system, workdir):
     """One real docking run via nested `apptainer run --nv`, following the
     project README: receptor.pdb + one ligand SDF, rank1.sdf as proof.
@@ -399,6 +429,11 @@ def check_diffdock(cfg, system, workdir):
         return out
     if system is None:
         out["verdict"] = "no_input_system"
+        return out
+
+    out["warmup"] = warmup_nested_mount(cfg["apptainer"], dd["sif"])
+    if out["warmup"]["verdict"] != "mounted":
+        out["verdict"] = "mount_never_ready"
         return out
 
     out_dir = (Path(workdir) / "diffdock_out").resolve()
