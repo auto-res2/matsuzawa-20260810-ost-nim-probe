@@ -73,15 +73,22 @@ def _path_facts(p):
 
 
 def check_environment():
-    """What machine are we actually on, and are we inside Apptainer?"""
+    """What machine are we actually on, and are we inside Apptainer?
+
+    The runtime variables recorded here (Slurm's and Apptainer's) are set by
+    the scheduler and the container runtime themselves when present. None of
+    them is required: every read has a None fallback and the probe runs to
+    completion on a bare laptop. They are observations, not configuration.
+    """
+    runtime_snapshot = dict(os.environ)
     out = {
         "arch": platform.machine(),
         "python": sys.version.split()[0],
         "cwd": os.getcwd(),
-        "in_apptainer": bool(os.environ.get("APPTAINER_CONTAINER")),
-        "apptainer_container": os.environ.get("APPTAINER_CONTAINER"),
-        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
-        "slurm_node": os.environ.get("SLURMD_NODENAME"),
+        "in_apptainer": "APPTAINER_CONTAINER" in runtime_snapshot,
+        "apptainer_container": runtime_snapshot.get("APPTAINER_CONTAINER"),
+        "slurm_job_id": runtime_snapshot.get("SLURM_JOB_ID"),
+        "slurm_node": runtime_snapshot.get("SLURMD_NODENAME"),
     }
     try:
         out["os_release"] = Path("/etc/os-release").read_text().splitlines()[0]
